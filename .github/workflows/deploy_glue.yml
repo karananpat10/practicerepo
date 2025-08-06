@@ -1,0 +1,52 @@
+name: Deploy Glue Job
+#1
+on:
+  push:
+    paths:
+      - 'scripts/glue.py'
+      - '.github/workflows/deploy_glue.yml'
+
+jobs:
+  deploy-glue-job:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Upload ETL scripts to S3
+        run: |
+          echo "Uploading scripts to S3..."
+          aws s3 sync scripts/ s3://practice-glue-script-output/glue-scripts/ --acl private
+          echo "Upload complete."
+      - name: Start AWS Glue job and log JobRunId
+        id: start_job
+        run: |
+          echo "Starting Glue Job..."
+          JOB_RUN_ID=$(aws glue start-job-run --job-name Yelp-job --query 'JobRunId' --output text)
+          echo "JobRunId: $JOB_RUN_ID"
+          echo "job_run_id=$JOB_RUN_ID" >> $GITHUB_OUTPUT
+      - name: Wait for Glue job to finish
+        run: |
+          JOB_RUN_ID=${{ steps.start_job.outputs.job_run_id }}
+          echo "Waiting for Glue Job ($JOB_RUN_ID) to finish..."
+          while true; do
+            STATUS=$(aws glue get-job-run --job-name Yelp-job --run-id $JOB_RUN_ID --query 'JobRun.JobRunState' --output text)
+            echo "Current Status: $STATUS"
+            if [[ "$STATUS" == "SUCCEEDED" ]]; then
+              echo "Glue job succeeded!"
+              break
+            elif [[ "$STATUS" == "FAILED" || "$STATUS" == "STOPPED" || "$STATUS" == "TIMEOUT" ]]; then
+              echo "Glue job failed or stopped with status: $STATUS"
+              exit 1
+            fi
+            sleep 30
+          done
